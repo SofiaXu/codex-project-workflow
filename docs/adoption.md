@@ -10,13 +10,16 @@
 
 ```text
 https://github.com/SofiaXu/codex-project-workflow/tree/main/skills/setup-project-workflow
+https://github.com/SofiaXu/codex-project-workflow/tree/main/skills/adversarial-acceptance
 ```
 
-安装目录必须包含 `SKILL.md`、`agents/openai.yaml`、`references/` 和 `assets/`；分发时保留随目录提供的 `LICENSE`。仅复制 `SKILL.md` 会缺少引用与模板。
+安装完整 Skill 目录，保留 `SKILL.md`、`agents/openai.yaml`、`references/`、`LICENSE` 及所带资源。工作流 Skill 包含 `assets/`；验收 Skill 包含 `scripts/`、`tests/`、`package.json` 和锁文件。仅复制正文会缺少必要资源，不分发 `node_modules/` 或个人配置。
 
 内置安装器默认使用 `$CODEX_HOME/skills`，未设置时为 `~/.codex/skills`。也可以将整个 Skill 目录复制到当前 Codex 运行时支持的用户技能目录。遇到同名目录时比较并合并本地修改，不直接覆盖。
 
-安装后在下一轮对话使用 `$setup-project-workflow`。如果尚未出现在技能列表，重新打开 Codex 并确认目录包含有效的 `name`、`description` 元数据。
+安装后在下一轮对话使用 `$setup-project-workflow` 或 `$adversarial-acceptance`。如果尚未出现在技能列表，重新打开 Codex 并确认目录包含有效的 `name`、`description` 元数据。
+
+验收 Skill 首次使用前，在其安装目录运行 `npm ci --ignore-scripts --no-audit --no-fund`。它需要 Node.js ≥24.9、Git 和 `rg`；需要真正的第三方 Agent 认证，模拟端点只用于测试。
 
 ## 适配目标项目
 
@@ -36,9 +39,21 @@ Skill 先读取项目事实，再选择初始化或迁移模式。新项目通�
 
 完整的文档职责和计划规则见[文档组织约定](../skills/setup-project-workflow/references/document-organization.md)。
 
+## 独立验收接入
+
+验收 Skill 使用实施前批准的计划原件和明确 Git 基准；不要传实现者总结。先通过 `capture` 运行选定验证，再由 `collect` 校验指纹并冻结原始材料，最后 `review` 调用独立 Agent。普通终端日志没有指纹绑定时不能冒充有效执行记录。
+
+默认复用已配置/已安装的 DeepSeek Agent 及其当前模型；没有可用安装时临时解析 npm `latest` 和最新可用模型，不升级已有安装。项目配置、Skill 本地配置和自定义脚本见 [Agent 接入](../skills/adversarial-acceptance/references/agent-adapters.md)。其他 Agent 须有真正关闭工具、自动规则和记忆的适配器，不能只凭 ACP 支持就视作已隔离。
+
+锁文件和二进制默认只提供变更状态与 SHA-256；核心证据超出 2 MiB 时明确失败，不截断。证据不足、引用错误和调用失败分别处理，结果不等于部署或业务现场验收。完整范围见[证据与裁决契约](../skills/adversarial-acceptance/references/evidence-contract.md)。
+
 ## 更新已安装版本
 
 先比较仓库 Skill 与本机安装副本，保留本地定制，再同步相关正文、引用和模板。更新 Skill 不会自动改写已经采用工作流的项目；需要调整某个项目时，在该项目中明确执行一次迁移。
+
+更新验收 Skill 时保留 `config.local.json`、`local/` 和项目配置；依赖改变后重新执行 `npm ci --ignore-scripts --no-audit --no-fund`。安装和更新不改全局 `AGENTS.md`，也不把验收设为所有任务的强制关卡。
+
+本地源码可通过 `node skills/adversarial-acceptance/scripts/install.mjs` 同步到用户级目录；`--target DIR` 可选择隔离安装位置。安装器复制正式资源并校验 SHA-256，保留目标的本地配置、调用脚本及其他额外资源，不复制依赖缓存。已有源码定制应先比对合并。
 
 全局模板也按条款合并，不用它覆盖已有全局约定。目标仓库自己的项目事实和授权继续有效。
 
@@ -58,3 +73,7 @@ Skill 行为变化时使用隔离样例验证受影响场景：
 | 安装分发 | 从仓库安装后，Skill 正文、引用和模板齐全，运行时可发现。 |
 
 验证原始记录和临时安装目录放在 `artifacts/`。不把本机路径、运行日志、聊天流水或私有项目样例带入公开提交。
+
+验收脚本变更，在 `skills/adversarial-acceptance/` 运行 `npm test`，按行为覆盖指纹与复用、删除取证、锁文件/二进制降噪、超限、引用校验、进程隔离、协议、摘要排除及重复安装。显式执行 `npm run test:live` 会调用真实 Agent，对包含缺陷与修复版本的两个小型样例做盲评；预期答案仅留在测试进程中，不发给评审者。`npm run test:installed` 从已安装的全局副本验证资源与命令入口，并检查当前仓库的产物忽略规则。通过 capture 分别保存原始输出，供独立验收读取。认证或安装等条件不满足时测试失败并保留缺口。
+
+`npm run test:profile` 通过真实 DSH 引擎和本地回环模型服务验证记忆/指令隔离，捕获实际模型输入并断言污染标记未进入；它与真实模型的两样例盲评分别报告。差异收集保留已提交、暂存、未暂存和未跟踪四层，相互抵消也不会丢失证据。

@@ -3,3 +3,6 @@ __pycache__/
 *.py[cod]
 .DS_Store
 Thumbs.db
+/skills/adversarial-acceptance/node_modules/
+/skills/adversarial-acceptance/config.local.json
+/skills/adversarial-acceptance/local/

@@ -1,6 +1,6 @@
 # Codex Project Workflow
 
-一套可跨项目采用的 Codex 开发工作流：用全局约定表达个人偏好，用项目级 `AGENTS.md` 明确项目事实与交付边界，用 Skill 初始化或迁移文档组织。
+一套可跨项目采用的 Codex 开发工作流：用全局约定表达个人偏好，用项目级 `AGENTS.md` 明确项目事实与交付边界，用 Skill 初始化文档组织或调用第三方 Agent 独立验收。
 
 适合希望减少重复提示词，同时保留项目自主性、有效验证和完整交付的人。
 
@@ -11,6 +11,7 @@
 | [全局 AGENTS.md](templates/global/AGENTS.md) | 复用优先、必要重构、自主推进、最小充分验证及已有修改保护。 |
 | [项目 AGENTS.md 模板](skills/setup-project-workflow/assets/project-agents.md.template) | 根据目标仓库生成项目责任、文档路由、验证与交付约定。 |
 | [setup-project-workflow Skill](skills/setup-project-workflow/SKILL.md) | 为新项目初始化工作流，或迁移已有项目的开发约定和文档组织。 |
+| [adversarial-acceptance Skill](skills/adversarial-acceptance/SKILL.md) | 只依据原始计划、git diff 和执行输出，独立裁决需求遗漏、删除断链与断言证据缺口。 |
 | [文档组织约定](skills/setup-project-workflow/references/document-organization.md) | 正式文档、待交付计划、验证产物和通用工具的职责与生命周期。 |
 | [接入与维护说明](docs/adoption.md) | 安装、适配、更新和验证方法。 |
 
@@ -26,7 +27,7 @@
 $skill-installer 从 https://github.com/SofiaXu/codex-project-workflow/tree/main/skills/setup-project-workflow 安装这个 Skill。
 ```
 
-安装的是 `skills/setup-project-workflow/` 整个目录，包括正文、引用和模板。内置安装器使用 `$CODEX_HOME/skills`，未设置 `CODEX_HOME` 时默认使用 `~/.codex/skills`。已有同名 Skill 时先比较和合并更新，避免直接覆盖本地定制。
+独立验收 Skill 可将上述路径换成 `skills/adversarial-acceptance`。两者分别安装，均需完整目录，包括正文、元数据、引用和所带模板或脚本。内置安装器使用 `$CODEX_HOME/skills`，未设置 `CODEX_HOME` 时默认使用 `~/.codex/skills`。已有同名 Skill 时先比较和合并更新，避免直接覆盖本地定制。
 
 安装后在下一轮对话使用；如果当前界面尚未刷新，可重新打开 Codex。
 
@@ -60,6 +61,16 @@ Skill 会读取项目实际情况，复用已有文档位置和规则，按任�
 
 全局模板与 Skill 可以分别使用。安装 Skill 不会自动更改全局约定；团队必须共同遵守的规则仍应保存在项目内。
 
+### 4. 按原始证据独立验收
+
+```text
+$adversarial-acceptance 对照批准的原始计划，使用第三方 Agent 验收当前变更；只传原计划、git diff 和原始执行输出。
+```
+
+验收器通过 `capture` 绑定测试前后工作区指纹，`collect` 冻结证据并自动检索删除项引用，`review` 在独立进程中调用第三方 Agent 并机械校验其引用。它区分通过、发现缺陷、证据不足和调用错误，返回裁决后交还主 Agent 处理。
+
+该 Skill 需要 Node.js ≥24.9、Git 和删除项检索用的 `rg`；首次使用在 Skill 目录运行 `npm ci --ignore-scripts --no-audit --no-fund`。默认复用已配置/已安装的 DeepSeek ACP Agent，缺少时临时取最新版；认证沿用已有配置。详细契约见[证据说明](skills/adversarial-acceptance/references/evidence-contract.md)和 [Agent 接入](skills/adversarial-acceptance/references/agent-adapters.md)。
+
 ## 工作流要点
 
 - **复用和必要替换。** 优先沿用现有模块，允许清理本轮替代的旧实现，并处理实际调用方、契约及数据影响。
@@ -85,7 +96,7 @@ Skill 会读取项目实际情况，复用已有文档位置和规则，按任�
 
 ## 验证与维护
 
-本仓库分发 Markdown、模板和 Skill 元数据，没有业务应用运行环境。变更后按影响检查 Skill 结构、内部链接、模板适配和安装结果；涉及行为变化时，使用隔离项目验证初始化、迁移、内容保留与重复执行。详细标准见[接入与维护说明](docs/adoption.md#验证)。
+本仓库分发 Markdown、模板、Skill 元数据及验收调用脚本，没有业务应用或部署目标。变更后按影响检查结构、链接、模板及安装结果；初始化/迁移用隔离项目验证，验收脚本使用其 Skill 目录下的 `npm test`，真实 Agent 接入另做小型盲评。详细标准见[接入与维护说明](docs/adoption.md#验证)。
 
 正式文档入口见[文档索引](docs/README.md)，后续工作见[需求与计划](docs/plan/README.md)。原始验证产物放在被忽略的 `artifacts/` 中。
 
