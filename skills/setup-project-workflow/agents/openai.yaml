@@ -1,0 +1,3 @@
+interface:
+  display_name: "项目工作流初始化与迁移"
+  short_description: "初始化或迁移项目开发约定、文档结构与计划生命周期，保留已有内容"
