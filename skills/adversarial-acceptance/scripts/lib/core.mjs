@@ -4,6 +4,7 @@ import { createReadStream } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { evidenceText, preferredEvidenceEncoding } from './evidence-text.mjs';
 
 export class AuditError extends Error {
   constructor(message, status = 'ERROR', details) {
@@ -364,7 +365,9 @@ export async function collect({ repo, out, plan, planRef, planOrigin, base, runs
   if (snapshot.digest !== after.digest) throw new AuditError('Workspace drifted during collection.', 'INSUFFICIENT_EVIDENCE');
   const bundle = { version: 1, createdAt: new Date().toISOString(), repositoryId: sha(root),
     base, fingerprint: snapshot, planOrigin: originals.origin, files: diff.files, executions, sources };
-  const bytes = Buffer.byteLength(canonical(reviewerEvidence(bundle)));
+  const view = reviewerEvidence(bundle);
+  bundle.evidenceEncoding = preferredEvidenceEncoding(view);
+  const bytes = Buffer.byteLength(evidenceText(view, bundle.evidenceEncoding));
   if (bytes > maxEvidenceBytes) throw new AuditError(`Core evidence exceeds limit: ${bytes} > ${maxEvidenceBytes} bytes.`, 'ERROR', {
     totalBytes: bytes, maxEvidenceBytes, sources: sources.map(item => ({ id: item.id, label: item.label, bytes: Buffer.byteLength(item.text) })) });
   bundle.coreBytes = bytes; bundle.maxEvidenceBytes = maxEvidenceBytes;
@@ -383,7 +386,8 @@ export function validateBundle(bundle) {
     const reconstructed = source(item.kind, item.label, Buffer.from(item.rawBase64, 'base64'));
     if (canonical(reconstructed) !== canonical(item)) throw new AuditError(`Evidence integrity check failed: ${item.id}`);
   }
-  const bytes = Buffer.byteLength(canonical(reviewerEvidence(bundle)));
+  const bytes = Buffer.byteLength(bundle.evidenceEncoding
+    ? evidenceText(reviewerEvidence(bundle), bundle.evidenceEncoding) : canonical(reviewerEvidence(bundle)));
   if (bytes !== bundle.coreBytes || bytes > bundle.maxEvidenceBytes) throw new AuditError('Evidence size check failed.');
   return bundle;
 }

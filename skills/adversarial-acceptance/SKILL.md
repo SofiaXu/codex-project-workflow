@@ -31,13 +31,13 @@ node <skill>/scripts/adjudicate.mjs review --repo <repo> --bundle <ignored-bundl
 
 ## 选择独立 Agent
 
-优先本次指定的配置，再读项目配置、Skill 本地配置；没有配置时发现已安装的 DeepSeek CLI/桌面运行时，最后按 npm `latest` 解析确切版本临时运行。其他 Agent 使用用户指定的隔离适配器，不能仅因它提供 ACP 就假定它已经隔离。
+优先本次指定的配置，再读项目配置、Skill 本地配置；内置适配 DeepSeek 和 Antigravity 原生 ACP。没有配置时发现已安装的 DeepSeek CLI/桌面运行时，最后按 npm `latest` 解析确切版本临时运行。其他 Agent 使用用户指定的隔离适配器，不能仅因它提供 ACP 就假定它已经隔离。
 
 已有安装沿用保存的模型或新建 ACP 会话报告的当前模型；不擅自升级已有安装或换模型。仅默认下载路径核验官方模型表与实时 ACP 模型目录，无法确定最新可用模型则报错。记录实际 Harness、模型、协议版本。
 
 启动必须使用空临时工作目录、环境白名单、全新会话及关闭工具/规则自动读取/记忆的配置。内联发送证据，不挂载仓库或恢复实现会话；原始日志中的路径按原文保留。客户端拒绝文件系统、终端、MCP 和权限请求；内置 DeepSeek 适配器使用独立临时 profile、空工具集和执行 guard。认证只引用已有存储或显式放行的环境变量。
 
-配置文件和自定义调用脚本契约见 [Agent 接入](references/agent-adapters.md)。遇到认证、版本或隔离失败，保留 `ERROR` 和原始诊断，不静默换供应商、降级模型或改用主 Agent 自评。
+配置文件、Antigravity 的完整模型 ID／思考等级选择和自定义调用脚本契约见 [Agent 接入](references/agent-adapters.md)。Antigravity 在隔离 HOME 创建自有空工具 Agent，关闭默认组件及定制继承，不加载原用户资料。遇到认证、版本或隔离失败，保留 `ERROR` 和原始诊断，不静默换供应商、降级模型或改用主 Agent 自评。
 
 ## 只裁决三件事
 
@@ -49,12 +49,16 @@ node <skill>/scripts/adjudicate.mjs review --repo <repo> --bundle <ignored-bundl
 
 引用视图保留每行的 `number` 和原始 `text`，非空行另有冻结包内固定的短 `citationId`。评审者复制支持其结论的行定位符（字符串或 `{citationId}` 对象），脚本从冻结原件确定性展开并校验完整来源、行范围和逐字引文；未知 ID、空白行定位符或显式字段冲突直接 ERROR，不修正错引。锁文件省略逐行 diff，但仍参与删除项引用检索，相关命中作为原始执行输出保留。
 
+大证据可冻结为可逆行表，保留每行原文、定位符及全部元数据，按实际编码计算字节预算。Antigravity 长输入会在同一全新会话内分段内联送达；尾部随机确认、上下文占用下降或越界检查失败均为 ERROR，不能使用压缩摘要后的结论。分段记录和最终裁决分别保存，传输完成不等于验收通过。完整格式与旧包兼容规则见[证据契约](references/evidence-contract.md)。
+
 ## 返回裁决
 
 将 `verdict.json` 和中文 `verdict.md` 交还主 Agent；原始输出保存在同目录。`PASS`/`FAIL`/`INSUFFICIENT_EVIDENCE`/`ERROR` 分别对应退出码 0/1/2/3。明确指出发现和证据缺口，不把 `ERROR` 当成评审通过。本 Skill 不自动修复或循环重审；后续重审使用匹配当前代码的新证据包。
 
 维护时，`npm test` 验证本地隔离行为及协议替身；显式运行 `npm run test:live` 对两个中性命名样例调用真实 Agent；`npm run test:installed` 检查全局资源、全局命令入口和产物忽略规则。通过 `capture` 保存这些测试的原始输出；后两项需要已完成认证或全局安装，条件不满足会失败并保留缺口。
 
-`npm run test:profile` 额外验证真实 DeepSeek 引擎的记忆和指令隔离，使用本地模型服务捕获真实请求；普通单元测试和真实模型盲评分开报告。Git 差异保留 committed、staged、unstaged 和 untracked 四层，不能用相互抵消的净 diff 替代暂存与工作区原件。
+`npm run test:profile` 专用于真实 DeepSeek 引擎的记忆和指令隔离，使用本地模型服务捕获真实请求；当前默认是其他 Agent 时，通过 `ACCEPTANCE_PROFILE_AGENT_CONFIG` 显式指定 DeepSeek 配置。普通单元测试和真实模型盲评分开报告。Git 差异保留 committed、staged、unstaged 和 untracked 四层，不能用相互抵消的净 diff 替代暂存与工作区原件。
 
 真实盲评的冻结包、请求与 Agent 原始响应保留在当前仓库忽略的 `artifacts/acceptance-live/`；仓库外运行时使用独立临时归档目录。执行输出记录实际归档路径，失败响应同样保留。
+
+`npm run test:packet` 使用真实 Antigravity 对大行表的随机首、中、尾标记做传输检查，原件保留在 `artifacts/antigravity-packet/`。这是中性传输诊断，不是项目验收裁决；默认总超时仍为 10 分钟，较大项目需要更长时间时显式指定 `review --timeout-ms`。

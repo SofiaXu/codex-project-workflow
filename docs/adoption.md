@@ -43,9 +43,11 @@ Skill 先读取项目事实，再选择初始化或迁移模式。新项目通�
 
 验收 Skill 使用实施前批准的计划原件和明确 Git 基准；不要传实现者总结。先通过 `capture` 运行选定验证，再由 `collect` 校验指纹并冻结原始材料，最后 `review` 调用独立 Agent。普通终端日志没有指纹绑定时不能冒充有效执行记录。
 
-默认复用已配置/已安装的 DeepSeek Agent 及其当前模型；没有可用安装时临时解析 npm `latest` 和最新可用模型，不升级已有安装。项目配置、Skill 本地配置和自定义脚本见 [Agent 接入](../skills/adversarial-acceptance/references/agent-adapters.md)。其他 Agent 须有真正关闭工具、自动规则和记忆的适配器，不能只凭 ACP 支持就视作已隔离。
+优先使用已配置的 Agent，内置 DeepSeek 和 Antigravity 原生 ACP 适配器；没有配置时复用已安装的 DeepSeek 及其当前模型，没有可用安装时临时解析 npm `latest` 和最新可用模型，不升级已有安装。项目配置、Skill 本地默认、Antigravity 模型选择和自定义脚本见 [Agent 接入](../skills/adversarial-acceptance/references/agent-adapters.md)。其他 Agent 须有真正关闭工具、自动规则和记忆的适配器，不能只凭 ACP 支持就视作已隔离。
 
 锁文件和二进制默认只提供变更状态与 SHA-256；核心证据超出 2 MiB 时明确失败，不截断。证据不足、引用错误和调用失败分别处理，结果不等于部署或业务现场验收。完整范围见[证据与裁决契约](../skills/adversarial-acceptance/references/evidence-contract.md)。
+
+大包可使用可逆行表减少重复字段，字节预算在 collect 冻结。Antigravity 逐段内联加载原文并保存确认，检测到上下文缩减或容量不足时拒绝结论；不以摘要绕过验收。`npm run test:packet` 用真实 Agent 检查大包随机标记的完整送达，属于传输诊断，原始结果进入忽略的 artifacts。
 
 ## 更新已安装版本
 

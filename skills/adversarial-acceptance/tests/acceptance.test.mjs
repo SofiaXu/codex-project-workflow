@@ -6,7 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { capture, collect, fingerprint, scopeOf, git, exists, validateBundle, removeTemporary, citationId,
-  run, reviewerEvidence } from '../scripts/lib/core.mjs';
+  run, reviewerEvidence, sha, canonical } from '../scripts/lib/core.mjs';
+import { evidenceText, decodeLineTable, LINE_TABLE } from '../scripts/lib/evidence-text.mjs';
 import { review, isolatedEnvironment, latestDeepSeekModel, resolveAgent } from '../scripts/lib/agent.mjs';
 import { parseVerdict, reviewPrompt } from '../scripts/lib/verdict.mjs';
 
@@ -164,9 +165,10 @@ test('command adapters use the same evidence/verdict contract; review refuses dr
   const result = await review({ repo: f.root, bundleFile: path.join(f.root, 'artifacts/bundle/bundle.json'), out: path.join(f.root, 'artifacts/command'), configFile });
   assert.equal(result.verdict, 'PASS', result.error);
   const deniedOut = path.join(f.root, 'artifacts/command-no-guard');
-  const unguardedConfig = await agentConfig(f.root, 'command-no-guard', { transport: 'command', timeoutMs: 500 });
+  const unguardedConfig = await agentConfig(f.root, 'command-no-guard', { transport: 'command', timeoutMs: 3500 });
   const denied = await review({ repo: f.root, bundleFile: path.join(f.root, 'artifacts/bundle/bundle.json'), out: deniedOut, configFile: unguardedConfig });
   assert.equal(denied.verdict, 'ERROR');
+  assert.match(denied.error, /did not acknowledge.*isolation before prompting/);
   assert.doesNotMatch(await fs.readFile(path.join(deniedOut, 'agent-stderr.raw'), 'utf8'), /COMMAND_INPUT_READ/);
   await f.write('new.txt', 'drift');
   const stale = await review({ repo: f.root, bundleFile: path.join(f.root, 'artifacts/bundle/bundle.json'), out: path.join(f.root, 'artifacts/stale'), configFile });
@@ -307,4 +309,27 @@ test('collect preserves committed, staged and unstaged versions even when index 
   assert.match(cancelled.sources.find(source => source.id === entries[0].diffId).text, /\+export const INDEX_ONLY_CHANGE/);
   assert.match(cancelled.sources.find(source => source.id === entries[1].diffId).text, /-export const INDEX_ONLY_CHANGE/);
   assert.equal((await git(f.root, ['diff', f.options.base, '--', 'api.mjs'])).length, 0);
+});
+
+test('collect binds lossless wire encoding and byte budget while validating legacy JSON bundles', async t => {
+  const f = await fixture(t);
+  await f.write('large.txt', '原文🔒\t"quoted"\\data\n'.repeat(8000));
+  const bundle = await f.bundle('large');
+  assert.equal(bundle.evidenceEncoding, LINE_TABLE);
+  const view = reviewerEvidence(bundle), encoded = evidenceText(view, bundle.evidenceEncoding);
+  assert.equal(bundle.coreBytes, Buffer.byteLength(encoded));
+  assert.deepEqual(decodeLineTable(encoded), view);
+  validateBundle(bundle);
+  await assert.rejects(collect({ ...f.options, maxEvidenceBytes: bundle.coreBytes - 1,
+    out: path.join(f.root, 'artifacts/too-large') }), error => error.status === 'ERROR' &&
+      error.details.totalBytes === bundle.coreBytes);
+  assert.equal(await exists(path.join(f.root, 'artifacts/too-large/bundle.json')), false);
+  const legacy = structuredClone(bundle);
+  delete legacy.evidenceEncoding;
+  legacy.coreBytes = Buffer.byteLength(canonical(reviewerEvidence(legacy)));
+  const { sha256, ...unsigned } = legacy; legacy.sha256 = sha(canonical(unsigned));
+  validateBundle(legacy);
+  const unknown = structuredClone(bundle); unknown.evidenceEncoding = 'not-an-encoding';
+  const { sha256: ignored, ...altered } = unknown; unknown.sha256 = sha(canonical(altered));
+  assert.throws(() => validateBundle(unknown), /Unknown frozen evidence encoding/);
 });

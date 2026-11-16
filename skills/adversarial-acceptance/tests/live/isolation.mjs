@@ -12,7 +12,7 @@ import { SOURCE } from '../../scripts/install.mjs';
 import { repoRoot, removeTemporary } from '../../scripts/lib/core.mjs';
 
 test('native DSH excludes seeded memory and instructions and rejects unknown required context before inference', { timeout: 45000 }, async t => {
-  const selected = await resolveAgent(await repoRoot(SOURCE));
+  const selected = await resolveAgent(await repoRoot(SOURCE), { configFile: process.env.ACCEPTANCE_PROFILE_AGENT_CONFIG });
   assert.equal(selected.adapter, 'deepseek', 'This engine-specific test requires a DeepSeek launcher.');
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'acceptance-profile-'));
   t.after(() => removeTemporary(root));

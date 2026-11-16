@@ -8,8 +8,11 @@ import { Readable, Writable } from 'node:stream';
 import { parse as parseYAML, stringify as stringifyYAML } from 'yaml';
 import { client, methods, ndJsonStream, PROTOCOL_VERSION, RequestError } from '@agentclientprotocol/sdk';
 import { AuditError, exists, run, readJSON, writeJSON, sha, fingerprint, repoRoot,
-  assertOutputLocation, validateBundle, removeTemporary } from './core.mjs';
+  assertOutputLocation, validateBundle, removeTemporary, reviewerEvidence } from './core.mjs';
 import { reviewPrompt, parseVerdict, renderReport } from './verdict.mjs';
+import { antigravityVersion, prepareAntigravity, verifyAntigravityProfile, selectAntigravityModel } from './antigravity.mjs';
+import { PacketContext, sendAntigravityPacket } from './packet-transport.mjs';
+import { evidenceText, preferredEvidenceEncoding, JSON_LINES } from './evidence-text.mjs';
 
 export const SKILL_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 // lib/ -> scripts/ -> skill/. Resolve explicitly to avoid package-manager cwd assumptions.
@@ -93,7 +96,7 @@ export async function resolveAgent(root, { configFile, model, timeoutMs } = {}) 
     const allowed = new Set(['version', 'adapter', 'transport', 'command', 'args', 'model', 'timeoutMs',
       'envAllowlist', 'credentialsFile', 'provider', 'isolation']);
     if (Object.keys(config).some(key => !allowed.has(key))) throw new AuditError('Unknown agent configuration field (prompts and summaries are not accepted).');
-    if (config.version !== 1 || !['deepseek', 'custom'].includes(config.adapter)) throw new AuditError('Unsupported agent configuration version/adapter.');
+    if (config.version !== 1 || !['deepseek', 'antigravity', 'custom'].includes(config.adapter)) throw new AuditError('Unsupported agent configuration version/adapter.');
     config = await normalizeLauncher(config, path.dirname(selected));
     config.selection = 'configured';
   } else {
@@ -122,6 +125,7 @@ export async function resolveAgent(root, { configFile, model, timeoutMs } = {}) 
   config.transport ||= 'acp';
   if (!['acp', 'command'].includes(config.transport)) throw new AuditError('Unsupported agent transport.');
   if (config.adapter === 'deepseek' && config.transport !== 'acp') throw new AuditError('The built-in DeepSeek adapter uses ACP.');
+  if (config.adapter === 'antigravity' && config.transport !== 'acp') throw new AuditError('The built-in Antigravity adapter uses ACP.');
   config.model = model || config.model;
   config.timeoutMs = timeoutMs ?? config.timeoutMs ?? 600000;
   if (!Number.isSafeInteger(config.timeoutMs) || config.timeoutMs < 1) throw new AuditError('timeoutMs must be a positive integer.');
@@ -212,10 +216,18 @@ export async function invokeAgent(config, prompt, { work, home, support, output,
     config.packageVersion = matched[0];
     config = await prepareDeepSeek(config, support, env);
   }
+  if (config.adapter === 'antigravity') {
+    const version = await run(config.command, [...config.args, '--version'],
+      { cwd: work, env, signal: AbortSignal.timeout(Math.min(15000, config.timeoutMs)) });
+    if (version.code !== 0) throw new AuditError('Antigravity CLI runtime version could not be verified.');
+    config.packageVersion = antigravityVersion(version.stdout.toString('utf8'));
+    config = await prepareAntigravity(config, { home });
+  }
   const remaining = config.timeoutMs - (Date.now() - started);
   if (remaining <= 0 || signal?.aborted) throw new AuditError(signal?.aborted ? 'Review cancelled.' : 'Review agent timed out.');
   const child = spawn(config.command, config.args, { cwd: work, env, shell: false, windowsHide: true, stdio: 'pipe' });
-  let raw = '', guardLine = '', violation, metadata, connection, ctx, sessionId, acknowledgeGuard;
+  let raw = '', guardLine = '', violation, metadata, connection, ctx, sessionId, acknowledgeGuard, modelExpectation;
+  const packetContext = new PacketContext();
   const guardAcknowledged = new Promise(resolve => { acknowledgeGuard = resolve; });
   const wire = [], stdoutFile = await fs.open(path.join(output, 'agent-stdout.raw'), 'wx');
   const stderrFile = await fs.open(path.join(output, 'agent-stderr.raw'), 'wx');
@@ -275,6 +287,16 @@ export async function invokeAgent(config, prompt, { work, home, support, output,
         .onNotification(methods.client.session.update, ({ params }) => {
           if (params.sessionId !== sessionId) return;
           const update = params.update;
+          if (config.adapter === 'antigravity' && update.sessionUpdate === 'usage_update') {
+            try { packetContext.observe(update); }
+            catch (error) { violation = error; controller.abort(error); }
+          }
+          if (modelExpectation && update.sessionUpdate === 'config_option_update' &&
+            Object.entries(modelExpectation).some(([name, value]) =>
+              update.configOptions.some(option => (option.id === name || option.category === name) && option.currentValue !== value))) {
+            violation = new AuditError('Antigravity changed the selected model/thinking level during review.');
+            controller.abort(violation);
+          }
           if (update.sessionUpdate === 'agent_message_chunk' && update.content.type === 'text') raw += update.content.text;
           if (['tool_call', 'tool_call_update'].includes(update.sessionUpdate)) {
             violation = new AuditError('Review agent attempted a forbidden tool call.');
@@ -290,28 +312,49 @@ export async function invokeAgent(config, prompt, { work, home, support, output,
         if (initialized.protocolVersion !== PROTOCOL_VERSION) throw new AuditError('ACP v1 protocol mismatch.');
         metadata = { ...initialized.agentInfo, protocolVersion: initialized.protocolVersion, selection: config.selection,
           packageVersion: config.packageVersion, inheritedSelection: config.initialSelection };
-        const session = await ctx.request(methods.agent.session.new, { cwd: work, mcpServers: [] }, requestOptions);
+        const session = await ctx.request(methods.agent.session.new, { cwd: work, mcpServers: [],
+          ...(config.adapter === 'antigravity' ? { _meta: { agy: { enabledTools: [] } } } : {}) }, requestOptions);
         sessionId = session.sessionId;
+        if (config.adapter === 'antigravity') {
+          await verifyAntigravityProfile(config, initialized);
+          acknowledgeGuard();
+        }
         await waitForGuard();
-        let modelOption = session.configOptions?.find(option => option.category === 'model' || option.id === 'model');
-        let selected = config.provider ? modelOption?.currentValue : config.model;
-        if (config.selection === 'download-latest' && !config.model) {
-          if (!modelOption) throw new AuditError('Default DeepSeek agent did not advertise a model catalog.');
-          let currentProvider;
-          try { currentProvider = JSON.parse(modelOption.currentValue)[0]; } catch { /* resolution below refuses ambiguous candidates */ }
-          metadata.latestResolution = await latestDeepSeekModel(modelOption.options, fetch, currentProvider, controller.signal);
-          selected = metadata.latestResolution.value;
+        if (config.adapter === 'antigravity') {
+          const chosen = await selectAntigravityModel(ctx, session, config.model, requestOptions);
+          metadata.model = chosen.model; metadata.configuration = chosen.configuration;
+          modelExpectation = chosen.configuration;
+        } else {
+          let modelOption = session.configOptions?.find(option => option.category === 'model' || option.id === 'model');
+          let selected = config.provider ? modelOption?.currentValue : config.model;
+          if (config.selection === 'download-latest' && !config.model) {
+            if (!modelOption) throw new AuditError('Default DeepSeek agent did not advertise a model catalog.');
+            let currentProvider;
+            try { currentProvider = JSON.parse(modelOption.currentValue)[0]; } catch { /* resolution below refuses ambiguous candidates */ }
+            metadata.latestResolution = await latestDeepSeekModel(modelOption.options, fetch, currentProvider, controller.signal);
+            selected = metadata.latestResolution.value;
+          }
+          if (selected && selected !== modelOption?.currentValue) {
+            if (!modelOption || !flattenOptions(modelOption.options).some(option => option.value === selected))
+              throw new AuditError('Configured model is not in the advertised catalog; no fallback attempted.');
+            const changed = await ctx.request(methods.agent.session.setConfigOption, { sessionId, configId: modelOption.id, value: selected }, requestOptions);
+            modelOption = changed.configOptions?.find(option => option.id === modelOption.id);
+            if (modelOption?.currentValue !== selected) throw new AuditError('Agent did not select the requested model.');
+          }
+          metadata.model = modelOption?.currentValue;
         }
-        if (selected && selected !== modelOption?.currentValue) {
-          if (!modelOption || !flattenOptions(modelOption.options).some(option => option.value === selected))
-            throw new AuditError('Configured model is not in the advertised catalog; no fallback attempted.');
-          const changed = await ctx.request(methods.agent.session.setConfigOption, { sessionId, configId: modelOption.id, value: selected }, requestOptions);
-          modelOption = changed.configOptions?.find(option => option.id === modelOption.id);
-          if (modelOption?.currentValue !== selected) throw new AuditError('Agent did not select the requested model.');
-        }
-        metadata.model = modelOption?.currentValue;
         if (!metadata.name || !metadata.version || !metadata.model) throw new AuditError('Agent failed to identify its actual version/current model.');
-        const response = await ctx.request(methods.agent.session.prompt, { sessionId, prompt: [{ type: 'text', text: prompt }] }, requestOptions);
+        const send = async text => {
+          if (violation) throw violation;
+          raw = '';
+          const response = await ctx.request(methods.agent.session.prompt,
+            { sessionId, prompt: [{ type: 'text', text }] }, requestOptions);
+          if (violation) throw violation;
+          return { ...response, raw };
+        };
+        const response = config.adapter === 'antigravity'
+          ? await sendAntigravityPacket(prompt, { send, getRaw: () => raw, output, context: packetContext })
+          : await send(prompt);
         if (violation) throw violation;
         if (response.stopReason !== 'end_turn') throw new AuditError(`Agent did not complete review: ${response.stopReason}.`);
         // Session close is optional in ACP v1. Connection teardown is mandatory.
@@ -351,7 +394,14 @@ export async function review({ repo, bundleFile, out, configFile, model, timeout
     temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'acceptance-review-'));
     const work = path.join(temporary, 'cwd'), home = path.join(temporary, 'home'), support = path.join(temporary, 'support');
     await Promise.all([work, home, support].map(directory => fs.mkdir(directory)));
-    const prompt = reviewPrompt(bundle);
+    const view = reviewerEvidence(bundle);
+    const encoding = bundle.evidenceEncoding ?? (config.adapter === 'antigravity' ? preferredEvidenceEncoding(view) : JSON_LINES);
+    const wireEvidenceBytes = Buffer.byteLength(evidenceText(view, encoding));
+    if (wireEvidenceBytes > bundle.maxEvidenceBytes) throw new AuditError('Escaped evidence exceeds the frozen byte budget; collect a new packet.');
+    const prompt = reviewPrompt(bundle, { encoding });
+    await writeJSON(path.join(out, 'packet-format.json'), { encoding, bundleSha256: bundle.sha256,
+      frozenCoreBytes: bundle.coreBytes, wireEvidenceBytes,
+      promptBytes: Buffer.byteLength(prompt), promptSha256: sha(prompt) });
     await fs.writeFile(path.join(out, 'request.txt'), prompt, { flag: 'wx' });
     const response = await invokeAgent(config, prompt, { work, home, support, output: out, signal });
     metadata = response.agent;

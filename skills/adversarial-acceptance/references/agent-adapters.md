@@ -36,6 +36,31 @@ guard 同时抑制可选动态上下文，以阻断记忆提供者；必需上�
 
 参考：[DeepSeek CLI](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/README.md)、[ACP 服务契约](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/acp/acp/README.md)、[工具限制](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/core/tools/README.md)。最新版适配不兼容时明确失败，不能跳过 guard 继续调用。
 
+## 内置 Antigravity 适配器
+
+支持已安装的 Antigravity CLI ≥1.5.9，通过原生 `agy acp` 使用稳定 ACP v1。将以下配置保存到用户级 Skill 的 `config.local.json`，即可作为这台电脑的验收默认；开发源码副本要使用同一默认时，在其被忽略的同名文件中保存相同配置。它不改 Antigravity App 或普通终端会话的模型偏好。
+
+```json
+{
+  "version": 1,
+  "adapter": "antigravity",
+  "transport": "acp",
+  "command": "agy",
+  "args": [],
+  "model": "gemini-4-carbon-high"
+}
+```
+
+Windows 可在本地配置使用 agy.exe 的绝对路径，避免宿主尚未刷新 PATH。args 仅用于原生解释器等启动前缀，适配器负责附加 acp 及隔离参数。认证使用既有系统凭据库；不复制用户配置、认证文件、规则、Skill、插件、会话或记忆。
+
+适配器在隔离 HOME 下生成独立 Gemini 数据目录、自有 agent 定义和最小 settings。原生 agent 配置空 tools/skills/plugins/mcpServers、inheritCustomizations: false、inheritMcp: false 和 excludeDefaultComponents: true；启动关闭默认定制，session/new 再发送空 enabledTools/MCP 列表。客户端仍不提供文件系统或终端能力，并拒绝工具与权限请求。成功建立新会话后、发送证据前，内置代码核对原生 ACP 身份/版本及生成配置的 SHA-256；原生 CLI 不需要实现自定义启动器的 stderr nonce 契约。
+
+model 使用实时目录中的完整 ID。对于 `gemini-4-carbon-high`，分别设置并核对 Model=gemini-4-carbon、Thinking Level=high；报告保存完整 ID 和两项实际配置。模型缺失、High 未生效、配置被改动或会话中模型降级都报 ERROR，不回退到 Medium、其他模型或其他供应商。未指定 model 时使用新会话报告的当前完整 ID。
+
+长输入使用[证据契约](evidence-contract.md)中的原文分段协议，避免原生单消息截断；加载确认与最终回应分别落盘。检测到上下文占用下降或容量耗尽即拒绝，不采纳摘要后的结果。默认 10 分钟覆盖加载和评审全程；显式 `--timeout-ms` 可调整，不自动延长或降级模型。`npm run test:packet` 可对本机原生运行时做大包诊断。
+
+参考：[原生 ACP](https://antigravity.google/docs/ide/extensions/acp/)、[自定义 Agent](https://antigravity.google/docs/subagents/)、[组件与工具隔离开关](https://antigravity.google/docs/changelog/)。模拟协议回归见 `tests/antigravity.test.mjs`；真实接入沿用 `npm run test:live`，原始响应继续归档。
+
 ## 其他 ACP Agent 与调用脚本
 
 `adapter: "custom"` 支持 `transport: "acp"` 或 `"command"`，并要求：

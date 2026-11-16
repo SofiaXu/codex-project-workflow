@@ -69,7 +69,7 @@ $adversarial-acceptance 对照批准的原始计划，使用第三方 Agent 验�
 
 验收器通过 `capture` 绑定测试前后工作区指纹，`collect` 冻结证据并自动检索删除项引用，`review` 在独立进程中调用第三方 Agent 并机械校验其引用。它区分通过、发现缺陷、证据不足和调用错误，返回裁决后交还主 Agent 处理。
 
-该 Skill 需要 Node.js ≥24.9、Git 和删除项检索用的 `rg`；首次使用在 Skill 目录运行 `npm ci --ignore-scripts --no-audit --no-fund`。默认复用已配置/已安装的 DeepSeek ACP Agent，缺少时临时取最新版；认证沿用已有配置。详细契约见[证据说明](skills/adversarial-acceptance/references/evidence-contract.md)和 [Agent 接入](skills/adversarial-acceptance/references/agent-adapters.md)。
+该 Skill 需要 Node.js ≥24.9、Git 和删除项检索用的 `rg`；首次使用在 Skill 目录运行 `npm ci --ignore-scripts --no-audit --no-fund`。优先使用已配置的 Agent，内置支持 DeepSeek 和 Antigravity ACP；未配置时复用已安装的 DeepSeek，缺少时临时取最新版。认证沿用已有存储。详细契约见[证据说明](skills/adversarial-acceptance/references/evidence-contract.md)和 [Agent 接入](skills/adversarial-acceptance/references/agent-adapters.md)。
 
 ## 工作流要点
 
