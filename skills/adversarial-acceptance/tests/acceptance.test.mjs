@@ -92,6 +92,32 @@ test('deletion scans include cross-language consumers, hidden configs and docs, 
   assert.ok(bundle.sources.some(item => item.label.endsWith('/command') && /"exitCode": 0/.test(item.text)));
 });
 
+test('declaration-based collection preserves real export references without searching removed body boilerplate', async t => {
+  const f = await fixture(t);
+  await f.write('Contract.cs', 'public class Contract {\n  public void RemovedApi() {}\n  public void Keep() {\n    var connection = new NpgsqlConnection(ConnectionString);\n    connection.OpenAsync();\n  }\n}\n');
+  await f.write('openapi.json', JSON.stringify({ openapi: '3.1.0', info: { title: 'Old API' }, paths: {} }));
+  await f.write('verify.ps1', '$connection = New-Connection\n$connection.OpenAsync()\n');
+  await f.write('consumer.ts', 'invoke("RemovedApi");\n');
+  await f.write('.github/settings.yml', 'entry: RemovedApi\n');
+  await f.write('guide.md', 'Use RemovedApi.\n');
+  await git(f.root, ['add', '.']);
+  await git(f.root, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'contract']);
+  f.options.base = (await git(f.root, ['rev-parse', 'HEAD'])).toString().trim();
+  await f.write('Contract.cs', 'public class Contract {\n  public void Keep() {\n    OpenReplacement();\n  }\n}\n');
+  await f.write('openapi.json', JSON.stringify({ openapi: '3.1.0', info: { title: 'New API' }, paths: {} }));
+  await f.write('verify.ps1', '$other = Get-Replacement\n');
+  const bundle = await f.bundle();
+  validateBundle(bundle);
+  const scope = JSON.parse(bundle.sources.find(item => item.label === 'reference-search/scope').text);
+  assert.deepEqual(scope.terms, ['RemovedApi']);
+  const metadata = bundle.files.find(file => file.path === 'Contract.cs').referenceDetection;
+  assert.equal(metadata.rule, 'csharp-declarations-v1');
+  assert.deepEqual(metadata.terms, ['RemovedApi']);
+  const logs = bundle.sources.filter(item => /reference-search\/\d+\/stdout/.test(item.label)).map(item => item.text).join('\n');
+  for (const name of ['consumer.ts', '.github/settings.yml', 'guide.md']) assert.ok(logs.includes(name), name);
+  assert.match(bundle.sources.find(item => item.label === 'unstaged/Contract.cs').text, /NpgsqlConnection/);
+});
+
 test('lock/binary diffs are metadata only; oversize and modified bundles fail explicitly', async t => {
   const f = await fixture(t);
   await f.write('package-lock.json', '{"secretNoise":"LOCK_CONTENT_MUST_NOT_APPEAR"}\n');

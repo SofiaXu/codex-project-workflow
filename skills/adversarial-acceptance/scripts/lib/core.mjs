@@ -5,6 +5,7 @@ import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { evidenceText, preferredEvidenceEncoding } from './evidence-text.mjs';
+import { conservativeCandidates, referenceDetection } from './deletion-candidates.mjs';
 
 export class AuditError extends Error {
   constructor(message, status = 'ERROR', details) {
@@ -253,12 +254,12 @@ async function changes(root, base, scope, includeLocks) {
     else patch = await git(root, ['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--find-renames', ...layer.revisions, '--', ...paths]);
     if (patch.length) {
       const item = source('diff', entry.layer + '/' + entry.path, patch);
+      entry.referenceDetection = referenceDetection(entry.oldPath || entry.path, before?.bytes, after?.bytes, item.text);
       entry.diffId = item.id; sources.push(item);
     }
   }
   return { files, sources };
 }
-const WORDS = new Set('const let var function class def return from import export default public private protected static async await null none true false self this new void string int if else for while try catch throw throws extends implements package using namespace module require exports as use'.split(' '));
 export function deletionCandidates(files, sources) {
   const terms = new Set();
   for (const file of files) {
@@ -266,20 +267,13 @@ export function deletionCandidates(files, sources) {
       const old = file.oldPath;
       terms.add(old); terms.add(old.replace(/\.[^/.]+$/, '')); terms.add(path.posix.basename(old));
     }
-    const patch = sources.find(item => item.id === file.diffId)?.text || '';
-    const removed = patch.split('\n').filter(line => line.startsWith('-') && !line.startsWith('---')).map(line => line.slice(1));
-    if (!removed.length || /\.(md|txt|rst|adoc|css|svg)$/i.test(file.path)) continue;
-    for (const line of removed) {
-      const tokens = new Set(line.match(/[\p{L}_$][\p{L}\p{N}_$]{2,}/gu) || []);
-      // Short public names are meaningful too. Restrict the noisy short-token
-      // fallback to declaration/call positions and explicit export lists/keys.
-      for (const match of line.matchAll(/\b(?:function|class|def|func|fn|type|interface|enum|struct|record|const|let|var)\s+([\p{L}_$][\p{L}\p{N}_$]*)/gu)) tokens.add(match[1]);
-      for (const match of line.matchAll(/([\p{L}_$][\p{L}\p{N}_$]*)\s*\(/gu)) tokens.add(match[1]);
-      for (const match of line.matchAll(/["']([\p{L}_$][\p{L}\p{N}_$]*)["']\s*:/gu)) tokens.add(match[1]);
-      if (/\bexport\s*(?:type\s*)?\{|\bexports\s*[.[=]|\b__all__\b|\bpub\s+use\b/.test(line))
-        for (const token of line.match(/[\p{L}_$][\p{L}\p{N}_$]*/gu) || []) tokens.add(token);
-      for (const token of tokens)
-        if (!WORDS.has(token.toLowerCase())) terms.add(token);
+    if (file.referenceDetection) {
+      for (const term of file.referenceDetection.terms) terms.add(term);
+    } else {
+      const patch = sources.find(item => item.id === file.diffId)?.text || '';
+      const removed = patch.split('\n').filter(line => line.startsWith('-') && !line.startsWith('---')).map(line => line.slice(1));
+      if (!/\.(md|txt|rst|adoc|css|svg)$/i.test(file.path))
+        for (const term of conservativeCandidates(removed)) terms.add(term);
     }
   }
   return sorted([...terms].filter(Boolean));
